@@ -1,0 +1,99 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Build artifacts (specific executables)
+go-server.exe
+webrtc-server.exe
+test-build.exe
+
+# Log files (runtime logs, not scripts)
+*.log
+logs/
+signaling.log
+stun-turn.log
+debug-*.log
+
+# SSL/TLS certificates (for security)
+certs/
+*.pem
+*.key
+*.crt
+*.csr
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+
+# PowerShell session files
+*.ps1.log
+
+# Windows batch files that might contain sensitive data (specific patterns)
+*_with_credentials.bat
+*_production.bat
+*_secret.bat
+
+# Monitoring and shutdown signals
+shutdown-signal.txt
+monitor-*.pid
+
+# Project-specific files (specific files, not patterns)
+main\ without\ stunturn\ logging
+stun-turn
+
+# Coverage reports
+coverage.txt
+coverage.html
+
+# Profiling data
+*.prof
+*.pprof
+
+# Air live reload
+tmp/
+
+# Local development files
+local-config.json
+local-settings.yaml 

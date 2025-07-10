@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STUN/TURN Server Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .info { color: #17a2b8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>STUN/TURN Server Test</h1>
+        <p>This page tests your STUN/TURN server connectivity and generates logs.</p>
+
+        <div class="test-section">
+            <h3>Server Configuration</h3>
+            <p><strong>STUN/TURN Server:</strong> <span id="serverAddress">localhost:3478</span></p>
+            <p><strong>Username:</strong> 1ac96ad0a8374103e5c58441</p>
+            <p><strong>Password:</strong> drTJQZjbVFKpcXfn</p>
+            <button onclick="updateServerAddress()">Update Server Address</button>
+        </div>
+
+        <div class="test-section">
+            <h3>STUN Discovery Test</h3>
+            <p>Tests basic STUN binding request (NAT discovery).</p>
+            <button onclick="testSTUN()">Test STUN Discovery</button>
+            <div id="stunLog" class="log"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>TURN Relay Test</h3>
+            <p>Tests TURN allocation and relay functionality.</p>
+            <button onclick="testTURN()">Test TURN Relay</button>
+            <div id="turnLog" class="log"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>WebRTC Connection Test</h3>
+            <p>Creates a WebRTC peer connection to test ICE gathering.</p>
+            <button onclick="testWebRTC()">Test WebRTC ICE</button>
+            <div id="webrtcLog" class="log"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>All Tests</h3>
+            <p>Run all tests sequentially.</p>
+            <button onclick="runAllTests()">Run All Tests</button>
+            <div id="allLog" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let serverAddress = 'localhost:3478';
+
+        function log(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = type;
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            element.appendChild(logEntry);
+            element.scrollTop = element.scrollHeight;
+        }
+
+        function updateServerAddress() {
+            const newAddress = prompt('Enter server address (e.g., localhost:3478 or your-server-ip:3478):', serverAddress);
+            if (newAddress) {
+                serverAddress = newAddress;
+                document.getElementById('serverAddress').textContent = serverAddress;
+                log('allLog', `Server address updated to: ${serverAddress}`, 'info');
+            }
+        }
+
+        function testSTUN() {
+            log('stunLog', 'Starting STUN discovery test...', 'info');
+            
+            const configuration = {
+                iceServers: [{
+                    urls: `stun:${serverAddress}`
+                }]
+            };
+
+            const pc = new RTCPeerConnection(configuration);
+            
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('stunLog', `ICE Candidate: ${event.candidate.candidate}`, 'info');
+                } else {
+                    log('stunLog', 'ICE gathering completed', 'success');
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                log('stunLog', `ICE gathering state: ${pc.iceGatheringState}`, 'info');
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                log('stunLog', `ICE connection state: ${pc.iceConnectionState}`, 'info');
+            };
+
+            // Create a data channel to trigger ICE gathering
+            const dc = pc.createDataChannel('test');
+            
+            pc.createOffer()
+                .then(offer => pc.setLocalDescription(offer))
+                .then(() => {
+                    log('stunLog', 'STUN test completed successfully', 'success');
+                })
+                .catch(error => {
+                    log('stunLog', `STUN test failed: ${error.message}`, 'error');
+                });
+        }
+
+        function testTURN() {
+            log('turnLog', 'Starting TURN relay test...', 'info');
+            
+            const configuration = {
+                iceServers: [{
+                    urls: `turn:${serverAddress}`,
+                    username: '1ac96ad0a8374103e5c58441',
+                    credential: 'drTJQZjbVFKpcXfn'
+                }]
+            };
+
+            const pc = new RTCPeerConnection(configuration);
+            
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('turnLog', `ICE Candidate: ${event.candidate.candidate}`, 'info');
+                    if (event.candidate.candidate.includes('relay')) {
+                        log('turnLog', 'TURN relay candidate found!', 'success');
+                    }
+                } else {
+                    log('turnLog', 'ICE gathering completed', 'success');
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                log('turnLog', `ICE gathering state: ${pc.iceGatheringState}`, 'info');
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                log('turnLog', `ICE connection state: ${pc.iceConnectionState}`, 'info');
+            };
+
+            // Create a data channel to trigger ICE gathering
+            const dc = pc.createDataChannel('test');
+            
+            pc.createOffer()
+                .then(offer => pc.setLocalDescription(offer))
+                .then(() => {
+                    log('turnLog', 'TURN test completed successfully', 'success');
+                })
+                .catch(error => {
+                    log('turnLog', `TURN test failed: ${error.message}`, 'error');
+                });
+        }
+
+        function testWebRTC() {
+            log('webrtcLog', 'Starting WebRTC ICE test...', 'info');
+            
+            const configuration = {
+                iceServers: [
+                    {
+                        urls: `stun:${serverAddress}`
+                    },
+                    {
+                        urls: `turn:${serverAddress}`,
+                        username: '1ac96ad0a8374103e5c58441',
+                        credential: 'drTJQZjbVFKpcXfn'
+                    }
+                ]
+            };
+
+            const pc = new RTCPeerConnection(configuration);
+            
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('webrtcLog', `ICE Candidate: ${event.candidate.candidate}`, 'info');
+                } else {
+                    log('webrtcLog', 'ICE gathering completed', 'success');
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                log('webrtcLog', `ICE gathering state: ${pc.iceGatheringState}`, 'info');
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                log('webrtcLog', `ICE connection state: ${pc.iceConnectionState}`, 'info');
+            };
+
+            // Create a data channel to trigger ICE gathering
+            const dc = pc.createDataChannel('test');
+            
+            pc.createOffer()
+                .then(offer => pc.setLocalDescription(offer))
+                .then(() => {
+                    log('webrtcLog', 'WebRTC test completed successfully', 'success');
+                })
+                .catch(error => {
+                    log('webrtcLog', `WebRTC test failed: ${error.message}`, 'error');
+                });
+        }
+
+        function runAllTests() {
+            log('allLog', 'Starting all tests...', 'info');
+            
+            setTimeout(() => testSTUN(), 1000);
+            setTimeout(() => testTURN(), 3000);
+            setTimeout(() => testWebRTC(), 5000);
+            
+            log('allLog', 'All tests scheduled. Check individual test logs above.', 'info');
+        }
+
+        // Initialize
+        log('allLog', 'STUN/TURN Server Test Page Loaded', 'info');
+        log('allLog', `Server: ${serverAddress}`, 'info');
+        log('allLog', 'Click "Run All Tests" to start testing', 'info');
+    </script>
+</body>
+</html> 
