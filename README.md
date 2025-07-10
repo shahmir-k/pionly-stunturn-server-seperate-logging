@@ -3,6 +3,14 @@
 [![Go Version](https://img.shields.io/badge/go-1.21%2B-blue?logo=go)](https://golang.org/dl/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Build Status](https://img.shields.io/badge/build-manual-lightgrey)](#building-from-source)
+[![WebRTC](https://img.shields.io/badge/WebRTC-Native-blue?logo=webrtc)](https://webrtc.org/)
+[![Pion](https://img.shields.io/badge/Pion-TURN%2FSTUN-orange?logo=go)](https://pion.ly/)
+[![WebSocket](https://img.shields.io/badge/WebSocket-Signaling-yellow?logo=websocket)](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
+[![STUN](https://img.shields.io/badge/STUN-NAT%20Discovery-cyan)](https://tools.ietf.org/html/rfc5389)
+[![TURN](https://img.shields.io/badge/TURN-Relay%20Server-purple)](https://tools.ietf.org/html/rfc5766)
+[![Gorilla WebSocket](https://img.shields.io/badge/Gorilla-WebSocket-red?logo=go)](https://github.com/gorilla/websocket)
+[![Cross Platform](https://img.shields.io/badge/Cross%20Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](https://golang.org/)
+[![Protocols](https://img.shields.io/badge/Protocols-UDP%20%7C%20TCP%20%7C%20TLS-green)](https://tools.ietf.org/html/rfc5766)
 
 A unified WebRTC server that combines signaling and STUN/TURN functionality in a single application, with enhanced logging, monitoring, and cross-platform support.
 
