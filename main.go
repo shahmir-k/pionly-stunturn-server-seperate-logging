@@ -302,19 +302,19 @@ import (
 // Port 443 is standard for HTTPS, but you can change this
 // Note: Modern browsers require HTTPS for WebRTC, so HTTP is mainly for development
 const (
-	httpPort = 443
+	httpPort  = 8080
+	httpsPort = 443
 )
 
 // Standard ports for different WebRTC protocols
 // These are IANA-assigned standard ports that most WebRTC clients expect
 // Using standard ports ensures maximum compatibility across different networks
 const (
-	turnUDPPort = 3478 // Standard TURN UDP - most common for WebRTC
-	turnTCPPort = 3478 // Standard TURN TCP - same port as UDP
-	turnTLSPort = 5349 // Standard TURNS (TURN over TLS) - secure TURN
-	stunUDPPort = 3478 // Standard STUN UDP - same port as TURN UDP
-	stunTCPPort = 3478 // Standard STUN TCP - same port as TURN TCP
-	stunTLSPort = 5349 // Standard STUNS (STUN over TLS) - secure STUN
+	stunturnHTTPPort  = 3478 // Standard TURN UDP/TCP Port - most common for WebRTC
+	stunturnHTTPSPort = 5349 // Standard TURNS (TURN over TLS) - secure TURN
+	//stunUDPPort = 3478 // Standard STUN UDP - same port as TURN UDP
+	//stunTCPPort = 3478 // Standard STUN TCP - same port as TURN TCP
+	//stunTLSPort = 5349 // Standard STUNS (STUN over TLS) - secure STUN
 )
 
 // ============================================================================
@@ -326,11 +326,20 @@ const (
 // Having multiple servers allows us to handle different network environments
 // NOTE: TURN servers inherently support STUN functionality - they are STUN/TURN servers
 var (
-	stunturnServer    *turn.Server      // UDP STUN/TURN server - handles both STUN discovery and TURN relay
-	stunturnTCPServer *turn.Server      // TCP STUN/TURN server - fallback for UDP-blocked networks
-	stunturnTLSServer *turn.Server      // TLS STUN/TURN server - secure encrypted discovery and relay
-	usersMap          map[string][]byte // Authentication credentials (username -> auth key)
-	stunturnPort      int               // STUN/TURN server port - configurable via command line
+	publicIP string // Public IP address of the server
+
+	stunturnServer     *turn.Server      // UDP STUN/TURN server - handles both STUN discovery and TURN relay
+	stunturnTCPServer  *turn.Server      // TCP STUN/TURN server - fallback for UDP-blocked networks
+	stunturnTLSServer  *turn.Server      // TLS STUN/TURN server - secure encrypted discovery and relay
+	usersMap           map[string][]byte // Authentication credentials (username -> auth key)
+	stunturnPort       int               // STUN/TURN server port - configurable via command line
+	stunturnTLSPort    int               // STUN/TURN TLS server port - configurable via command line
+	signalingHTTPPort  int               // Signaling server port - configurable via command line
+	signalingHTTPSPort int               // Signaling server port - configurable via command line
+	signalingPort      int               // What port did we actually end up using for signaling
+
+	stunturnCertsFound  bool // Whether the STUN/TURN server has SSL certificates
+	signalingCertsFound bool // Whether the Signaling server has SSL certificates
 
 	// Loggers for different services
 	// Separate loggers help with debugging and monitoring
@@ -355,7 +364,7 @@ func main() {
 	// This is a common pattern in Go applications for flexibility
 	// Users can customize the server behavior without touching the source code
 
-	publicIP := flag.String("public-ip", "", "IP Address that TURN can be contacted by.")
+	publicIPFlag := flag.String("public-ip", "", "IP Address that TURN can be contacted by.")
 	// ^ This is CRITICAL - TURN server must know its public IP for relay allocation
 	//   Clients will connect to this IP address for relay services
 	//   Example: "203.0.113.1" or "api.yourdomain.com"
@@ -376,7 +385,19 @@ func main() {
 	//   Each thread handles connections independently
 	//   Recommended: 1-4 threads depending on your server's CPU cores
 
-	turnPortFlag := flag.Int("turn-port", 3478, "TURN server port (defaults to 3478)")
+	signalingHTTPPortFlag := flag.Int("signaling-http-port", httpPort, fmt.Sprintf("Signaling server HTTP port (defaults to %d)", httpPort))
+	// ^ Custom signaling port - useful if 80 is blocked or in use
+	//   Standard port 80 is recommended for maximum compatibility
+
+	signalingHTTPSPortFlag := flag.Int("signaling-https-port", httpsPort, fmt.Sprintf("Signaling server HTTPS port (defaults to %d)", httpsPort))
+	// ^ Custom signaling HTTPS port - useful if 443 is blocked or in use
+	//   Standard port 443 is recommended for maximum compatibility
+
+	stunturnHTTPPortFlag := flag.Int("stunturn-http-port", stunturnHTTPPort, fmt.Sprintf("STUN/TURN HTTP server port (defaults to %d)", stunturnHTTPPort))
+	// ^ Custom TURN port - useful if 3478 is blocked or in use
+	//   Standard port 3478 is recommended for maximum compatibility
+
+	stunturnHTTPSPortFlag := flag.Int("stunturn-https-port", stunturnHTTPSPort, fmt.Sprintf("STUN/TURN HTTPS server port (defaults to %d)", stunturnHTTPSPort))
 	// ^ Custom TURN port - useful if 3478 is blocked or in use
 	//   Standard port 3478 is recommended for maximum compatibility
 
@@ -402,8 +423,14 @@ func main() {
 	// This helps with debugging and monitoring by separating concerns
 	setupLogging(*separateLogs, *stunturnLogFile, *signalingLogFile)
 
+	// Set global public IP for use throughout the application
+	publicIP = *publicIPFlag
+
 	// Set global turn port for use throughout the application
-	stunturnPort = *turnPortFlag
+	stunturnPort = *stunturnHTTPPortFlag
+	stunturnTLSPort = *stunturnHTTPSPortFlag
+	signalingHTTPPort = *signalingHTTPPortFlag
+	signalingHTTPSPort = *signalingHTTPSPortFlag
 
 	// ========================================================================
 	// DEFAULT CONFIGURATION
@@ -412,7 +439,7 @@ func main() {
 	// In production, you should always provide your own credentials
 	// These default credentials are for educational purposes only
 	if len(*turnUsers) == 0 {
-		*turnUsers = "1ac96ad0a8374103e5c58441=drTJQZjbVFKpcXfn"
+		*turnUsers = "username=password"
 		stunTurnLogger.Println("Using default TURN credentials - NOT recommended for production!")
 		stunTurnLogger.Println("For production, use: -turn-users \"youruser=yourpassword\"")
 	}
@@ -423,7 +450,7 @@ func main() {
 	// Public IP is required because TURN server needs to know its external address
 	// This is used when allocating relay addresses to clients
 	// Without this, clients won't be able to connect to the relay
-	if len(*publicIP) == 0 {
+	if len(publicIP) == 0 {
 		stunTurnLogger.Println("No public IP provided. Attempting to auto-detect...")
 
 		// Try multiple methods to detect public IP
@@ -464,16 +491,16 @@ func main() {
 
 		// If we successfully detected an IP, use it
 		if detectedIP != "" {
-			*publicIP = detectedIP
-			stunTurnLogger.Printf("Using auto-detected public IP: %s", *publicIP)
+			publicIP = detectedIP
+			stunTurnLogger.Printf("Using auto-detected public IP: %s", publicIP)
 			stunTurnLogger.Println("Note: Auto-detected IP may not be accurate in all network configurations.")
 			stunTurnLogger.Println("For production use, explicitly specify your public IP with -public-ip flag.")
 		} else {
 			// Last resort: Try to detect local IP for development
 			stunTurnLogger.Println("External IP detection failed. Trying local IP detection for development...")
 			if localIP, err := detectLocalIP(); err == nil {
-				*publicIP = localIP
-				stunTurnLogger.Printf("Using local IP for development: %s", *publicIP)
+				publicIP = localIP
+				stunTurnLogger.Printf("Using local IP for development: %s", publicIP)
 				stunTurnLogger.Println("WARNING: This is a local IP address. TURN relay may not work properly.")
 				stunTurnLogger.Println("For production use, explicitly specify your public IP with -public-ip flag.")
 			} else {
@@ -491,7 +518,7 @@ func main() {
 			}
 		}
 	} else {
-		stunTurnLogger.Printf("Using provided public IP: %s", *publicIP)
+		stunTurnLogger.Printf("Using provided public IP: %s", publicIP)
 	}
 
 	// ========================================================================
@@ -500,7 +527,7 @@ func main() {
 	// Initialize all STUNTURN servers with the provided configuration
 	// This sets up UDP, TCP, and TLS variants based on the flags
 	// Each protocol serves different network environments
-	if err := initializeSTUNTurnServer(*publicIP, *turnUsers, *realm, *threadNum, *enableTCP, *enableTLS); err != nil {
+	if err := initializeSTUNTurnServer(publicIP, *turnUsers, *realm, *threadNum, *enableTCP, *enableTLS); err != nil {
 		stunTurnLogger.Fatalf("Failed to initialize STUN/TURN server: %v", err)
 	}
 
@@ -554,17 +581,24 @@ func main() {
 	if *enableTCP {
 		stunTurnLogger.Printf("- STUN/TURN server TCP: :%d (STUN discovery + TURN relay)", stunturnPort)
 	}
-	if *enableTLS {
-		stunTurnLogger.Printf("- STUN/TURN server TLS: :%d (STUN discovery + TURN relay)", turnTLSPort)
+	if *enableTLS && stunturnCertsFound {
+		stunTurnLogger.Printf("- STUN/TURN server TLS: :%d (STUN discovery + TURN relay)", stunturnTLSPort)
 	}
-	stunTurnLogger.Printf("- Public IP: %s", *publicIP)
+	stunTurnLogger.Printf("- Public IP: %s", publicIP)
 	stunTurnLogger.Printf("- Realm: %s", *realm)
 	stunTurnLogger.Printf("=== STUN/TURN SERVER READY ===")
 
 	signalingLogger.Printf("=== WEBRTC SIGNALING SERVER STATUS ===")
-	signalingLogger.Printf("- Signaling server: :%d (HTTP/HTTPS)", httpPort)
+	//signalingLogger.Printf("- Signaling server: :%d (HTTP/HTTPS)", httpPort)
 	signalingLogger.Printf("- WebSocket endpoint: /signal")
 	signalingLogger.Printf("=== SIGNALING SERVER READY ===\n\n\n")
+
+	// Print shutdown instructions to main terminal
+	fmt.Println("\n" + strings.Repeat("=", 60))                              // Print a line of 60 equal signs
+	fmt.Println("🚀 WebRTC Server is now running!")                           // Print a message
+	fmt.Println("📊 Monitoring windows should have opened automatically")     // Print a message
+	fmt.Println("🛑 Press Ctrl + C to shutdown server and close all windows") // Print a message
+	fmt.Println(strings.Repeat("=", 60) + "\n")                              // Print a line of 60 equal signs
 
 	// ========================================================================
 	// MAIN EVENT LOOP
@@ -607,22 +641,47 @@ func main() {
 		os.Remove("signaling-monitor.ps1")
 		os.Remove("shutdown-signal.txt")
 	} else {
-		// On Unix systems, use SIGTERM for graceful shutdown
+		// On Unix systems, create shutdown signal file to tell monitoring windows to close
+		os.WriteFile("shutdown-signal.txt", []byte("shutdown"), 0644)
+		stunTurnLogger.Printf("Monitoring windows will close automatically")
+
+		// On Unix systems, use SIGTERM for graceful shutdown, SIGKILL as fallback
 		if stunturnMonitor != nil {
+			// Try graceful shutdown first
 			if err := stunturnMonitor.Signal(syscall.SIGTERM); err != nil {
-				stunTurnLogger.Printf("Failed to close STUN/TURN monitoring window: %v", err)
+				stunTurnLogger.Printf("Failed to send SIGTERM to STUN/TURN monitoring window: %v", err)
 			} else {
-				stunTurnLogger.Printf("STUN/TURN monitoring window closed")
+				// Wait a bit for graceful shutdown
+				time.Sleep(500 * time.Millisecond)
+
+				// Force kill after timeout to ensure cleanup
+				if err := stunturnMonitor.Signal(syscall.SIGKILL); err != nil {
+					stunTurnLogger.Printf("Failed to send SIGKILL to STUN/TURN monitoring window: %v", err)
+				} else {
+					stunTurnLogger.Printf("STUN/TURN monitoring window closed")
+				}
 			}
 		}
 
 		if signalingMonitor != nil {
+			// Try graceful shutdown first
 			if err := signalingMonitor.Signal(syscall.SIGTERM); err != nil {
-				stunTurnLogger.Printf("Failed to close signaling monitoring window: %v", err)
+				stunTurnLogger.Printf("Failed to send SIGTERM to signaling monitoring window: %v", err)
 			} else {
-				stunTurnLogger.Printf("Signaling monitoring window closed")
+				// Wait a bit for graceful shutdown
+				time.Sleep(500 * time.Millisecond)
+
+				// Force kill after timeout to ensure cleanup
+				if err := signalingMonitor.Signal(syscall.SIGKILL); err != nil {
+					stunTurnLogger.Printf("Failed to send SIGKILL to signaling monitoring window: %v", err)
+				} else {
+					stunTurnLogger.Printf("Signaling monitoring window closed")
+				}
 			}
 		}
+
+		// Clean up shutdown signal file
+		os.Remove("shutdown-signal.txt")
 	}
 
 	stunTurnLogger.Println("STUN/TURN servers shut down successfully")
@@ -921,10 +980,30 @@ exit`, signalingLogFile)
 				stunTurnLogger.Printf("Signaling log monitor window opened successfully")
 			}
 		} else {
-			// For Linux/Unix, use 'xterm' to open new terminal
+			// For Linux/Unix, use 'gnome-terminal' to open new terminal
 			// The -e flag executes the tail command in the new window
-			cmd1 := exec.Command("xterm", "-e", "tail", "-f", stunturnLogFile)
-			cmd2 := exec.Command("xterm", "-e", "tail", "-f", signalingLogFile)
+			// Try multiple terminal emulators for better compatibility
+			var cmd1, cmd2 *exec.Cmd
+
+			// Try gnome-terminal first (most common on Ubuntu/Linux Mint)
+			if _, err := exec.LookPath("gnome-terminal"); err == nil {
+				cmd1 = exec.Command("gnome-terminal", "--", "bash", "-c", fmt.Sprintf("cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit", stunturnLogFile, stunturnLogFile))
+				cmd2 = exec.Command("gnome-terminal", "--", "bash", "-c", fmt.Sprintf("cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit", signalingLogFile, signalingLogFile))
+			} else if _, err := exec.LookPath("konsole"); err == nil {
+				// Fallback to konsole (KDE)
+				cmd1 = exec.Command("konsole", "-e", fmt.Sprintf("bash -c 'cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit'", stunturnLogFile, stunturnLogFile))
+				cmd2 = exec.Command("konsole", "-e", fmt.Sprintf("bash -c 'cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit'", signalingLogFile, signalingLogFile))
+			} else if _, err := exec.LookPath("xterm"); err == nil {
+				// Fallback to xterm if available
+				cmd1 = exec.Command("xterm", "-e", "bash", "-c", fmt.Sprintf("cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit", stunturnLogFile, stunturnLogFile))
+				cmd2 = exec.Command("xterm", "-e", "bash", "-c", fmt.Sprintf("cat %s && tail -f %s & TAIL_PID=$!; while [ ! -f shutdown-signal.txt ]; do sleep 1; done; kill $TAIL_PID; exit", signalingLogFile, signalingLogFile))
+			} else {
+				// No terminal emulator found, log the issue
+				stunTurnLogger.Printf("No suitable terminal emulator found (tried: gnome-terminal, konsole, xterm)")
+				stunTurnLogger.Printf("Logs are available in files: %s and %s", stunturnLogFile, signalingLogFile)
+				stunTurnLogger.Printf("You can monitor them manually with: tail -f %s", stunturnLogFile)
+				return
+			}
 
 			// Start both monitoring processes
 			// Unix systems use different process management than Windows
@@ -1109,7 +1188,7 @@ func initializeUDPTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 	// Create UDP address for the server
 	// "0.0.0.0" means listen on all network interfaces
 	// Port 3478 is the standard TURN UDP port (IANA assigned)
-	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:"+strconv.Itoa(turnUDPPort))
+	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:"+strconv.Itoa(stunturnPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -1124,13 +1203,13 @@ func initializeUDPTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This is essential when using multiple threads
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 				if operr != nil {
 					return
 				}
 				// Set SO_BROADCAST for UDP broadcast capabilities
 				// This allows the server to handle broadcast packets
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
 			}); err != nil {
 				return err
 			}
@@ -1223,7 +1302,7 @@ func initializeTCPTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 	// Create TCP address for the server
 	// Same port as UDP (3478) but different protocol
 	// "0.0.0.0" means listen on all network interfaces
-	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(turnTCPPort))
+	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(stunturnPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -1237,7 +1316,7 @@ func initializeTCPTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This enables multiple threads to share the same port
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			}); err != nil {
 				return err
 			}
@@ -1374,7 +1453,7 @@ func initializeTLSTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 	// Create TCP address for the server
 	// Port 5349 is the standard TURNS (TURN over TLS) port
 	// Different from standard TURN port (3478) to distinguish protocols
-	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(turnTLSPort))
+	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(stunturnTLSPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -1388,7 +1467,7 @@ func initializeTLSTURNServer(relayGen *turn.RelayAddressGeneratorStatic, authHan
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This enables multiple threads to share the same port
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			}); err != nil {
 				return err
 			}
@@ -1498,21 +1577,25 @@ func startWebRTC_SignallingServer() {
 		// No SSL certificates found - start HTTP server
 		// This is suitable for development and testing
 		// Note: WebRTC may not work in browsers without HTTPS
-		signalingLogger.Printf("SSL certificate not found. Starting HTTP server on :%d", httpPort)
+		signalingCertsFound = false
+		signalingPort = signalingHTTPPort
+		signalingLogger.Printf("SSL certificate not found. Starting HTTP server on :%d", signalingPort)
 		signalingLogger.Println("To enable HTTPS, place fullchain.pem and privkey.pem files in the certs/ directory")
 
 		// Start HTTP server
 		// Note: Modern browsers require HTTPS for WebRTC, so HTTP is mainly for development
 		// HTTP can be used for testing with non-browser clients (mobile apps, etc.)
-		signalingLogger.Printf("WebRTC signaling server starting on :%d (HTTP)", httpPort)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), nil); err != nil {
+		signalingLogger.Printf("WebRTC signaling server starting on %s:%d (HTTP)", publicIP, signalingPort)
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", signalingPort), nil); err != nil {
 			signalingLogger.Fatal("Server error:", err)
 		}
 	} else {
 		// SSL certificates found - start HTTPS server
 		// This is the recommended configuration for production use
-		signalingLogger.Printf("SSL certificates found. Starting HTTPS server on :%d", httpPort)
-		signalingLogger.Printf("WebRTC signaling server starting on :%d (HTTPS)", httpPort)
+		signalingCertsFound = true
+		signalingPort = signalingHTTPSPort
+		signalingLogger.Printf("SSL certificates found. Starting HTTPS server on :%d", signalingPort)
+		signalingLogger.Printf("WebRTC signaling server starting on %s:%d (HTTPS)", publicIP, signalingPort)
 
 		// Configure TLS settings for HTTPS
 		// MinVersion ensures we use secure TLS versions
@@ -1525,9 +1608,9 @@ func startWebRTC_SignallingServer() {
 		// The server includes proper error handling and logging
 		// Custom error logger helps with debugging TLS issues
 		server := &http.Server{
-			Addr:      fmt.Sprintf(":%d", httpPort),
+			Addr:      fmt.Sprintf(":%d", signalingPort),
 			TLSConfig: tlsConfig,
-			ErrorLog:  signalingLogger,
+			//ErrorLog:  signalingLogger,
 		}
 
 		// Start HTTPS server with SSL certificates
@@ -1857,7 +1940,7 @@ func initializeUDPSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 	// Create UDP address for the server
 	// "0.0.0.0" means listen on all network interfaces
 	// Port 3478 is the standard STUNTURN UDP port (IANA assigned)
-	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:"+strconv.Itoa(turnUDPPort))
+	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:"+strconv.Itoa(stunturnPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -1872,13 +1955,13 @@ func initializeUDPSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This is essential when using multiple threads
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 				if operr != nil {
 					return
 				}
 				// Set SO_BROADCAST for UDP broadcast capabilities
 				// This allows the server to handle broadcast packets
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
 			}); err != nil {
 				return err
 			}
@@ -1983,7 +2066,7 @@ func initializeTCPSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 	// Create TCP address for the server
 	// Same port as UDP (3478) but different protocol
 	// "0.0.0.0" means listen on all network interfaces
-	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(turnTCPPort))
+	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(stunturnPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -1997,7 +2080,7 @@ func initializeTCPSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This enables multiple threads to share the same port
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			}); err != nil {
 				return err
 			}
@@ -2124,8 +2207,10 @@ func initializeTLSSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 	// This allows the server to run without TLS if certificates are not available
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
 		stunTurnLogger.Printf("SSL certificates not found. Skipping TLS STUNTURN server.")
+		stunturnCertsFound = false
 		return nil
 	}
+	stunturnCertsFound = true
 
 	// Load TLS certificate and private key
 	// The certificate must be valid and trusted by clients
@@ -2146,7 +2231,7 @@ func initializeTLSSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 	// Create TCP address for the server
 	// Port 5349 is the standard STUNTURNS (STUNTURN over TLS) port
 	// Different from standard STUNTURN port (3478) to distinguish protocols
-	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(turnTLSPort))
+	addr, err := net.ResolveTCPAddr("tcp", "0.0.0.0:"+strconv.Itoa(stunturnTLSPort))
 	if err != nil {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
@@ -2160,7 +2245,7 @@ func initializeTLSSTUNTurnServer(relayGen *turn.RelayAddressGeneratorStatic, aut
 			if err := conn.Control(func(fd uintptr) {
 				// Set SO_REUSEADDR to allow multiple listeners on same port
 				// This enables multiple threads to share the same port
-				operr = syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				operr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 			}); err != nil {
 				return err
 			}
