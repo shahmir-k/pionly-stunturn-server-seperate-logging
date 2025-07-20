@@ -42,12 +42,27 @@ A unified WebRTC server that combines signaling and STUN/TURN functionality in a
 
 1. **Edit the startup script:**
 
+    If you don't set the PUBLIC_IP then the server will try to automatically detect your IP. So you can skip this step!
+
    - Windows: Edit `helpful-scripts\start-server.bat` and set `PUBLIC_IP=YOUR_ACTUAL_IP`
    - Linux/macOS: Edit `helpful-scripts/start-server.sh` and set `PUBLIC_IP=YOUR_ACTUAL_IP`
 
 2. **Run the server:**
-   - Windows: `helpful-scripts\start-server.bat`
-   - Linux/macOS: `chmod +x helpful-scripts/start-server.sh && ./helpful-scripts/start-server.sh`
+
+
+   - Windows: 
+   
+     Open the project folder in Powershell and run
+   ```shell
+   helpful-scripts\start-server.bat
+   ```
+   - Linux/macOS: 
+     
+     Open the project in Terminal and run
+   ```shell
+   chmod +x helpful-scripts/start-server.sh
+   ./helpful-scripts/start-server.sh
+   ```
 
 ---
 
