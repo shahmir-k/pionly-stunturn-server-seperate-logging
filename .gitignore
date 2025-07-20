@@ -18,6 +18,7 @@
 go.work
 
 # Build artifacts (specific executables)
+go-server
 go-server.exe
 webrtc-server.exe
 test-build.exe
